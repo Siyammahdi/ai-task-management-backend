@@ -9,18 +9,29 @@ datasource db {
 }
 
 model User {
-  id    Int    @id @default(autoincrement())
-  email String @unique
-  name  String
-  tasks Task[]
+  id       Int    @id @default(autoincrement())
+  name     String
+  username String @unique
+  password String
+  email    String?
+  tasks    Task[]
 }
 
 model Task {
-  id          Int      @id @default(autoincrement())
+  id          Int       @id @default(autoincrement())
   title       String
   description String
   status      String
   dueDate     DateTime
   userId      Int
-  user        User     @relation(fields: [userId], references: [id])
+  user        User      @relation(fields: [userId], references: [id])
+  subtasks    SubTask[]
+}
+
+model SubTask {
+  id      Int    @id @default(autoincrement())
+  title   String
+  done    Boolean @default(false)
+  task    Task   @relation(fields: [taskId], references: [id])
+  taskId  Int
 } 

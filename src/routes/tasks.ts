@@ -4,22 +4,24 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 const router = Router();
 
-// Get all tasks
+// Get all tasks (include subtasks)
 router.get('/', async (req: Request, res: Response) => {
   try {
-    const tasks = await prisma.task.findMany({ include: { user: true } });
+    const tasks = await prisma.task.findMany({
+      include: { user: true, subtasks: true },
+    });
     res.json(tasks);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch tasks' });
   }
 });
 
-// Get a single task by ID
+// Get a single task by ID (include subtasks)
 router.get('/:id', async (req, res): Promise<void> => {
   try {
     const task = await prisma.task.findUnique({
       where: { id: Number(req.params.id) },
-      include: { user: true },
+      include: { user: true, subtasks: true },
     });
     if (!task) { res.status(404).json({ error: 'Task not found' }); return; }
     res.json(task);
@@ -28,14 +30,24 @@ router.get('/:id', async (req, res): Promise<void> => {
   }
 });
 
-// Create a new task
+// Create a new task (with optional subtasks)
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const { title, description, status, dueDate, userId } = req.body;
-    const task = await prisma.task.create({
-      data: { title, description, status, dueDate: new Date(dueDate), userId },
+    const { title, description, status, dueDate, userId, subtasks } = req.body;
+    const created = await prisma.task.create({
+      data: {
+        title,
+        description,
+        status,
+        dueDate: new Date(dueDate),
+        userId,
+        subtasks: subtasks && Array.isArray(subtasks)
+          ? { create: subtasks.map((st: any) => ({ title: st.title, done: !!st.done })) }
+          : undefined,
+      },
+      include: { user: true, subtasks: true },
     });
-    res.status(201).json(task);
+    res.status(201).json(created);
   } catch (err) {
     res.status(500).json({ error: 'Failed to create task' });
   }
