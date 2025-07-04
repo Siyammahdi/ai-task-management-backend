@@ -1,13 +1,16 @@
 import { Router, Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
+import { authenticateToken, AuthRequest } from '../middleware/auth';
 
 const prisma = new PrismaClient();
 const router = Router();
 
-// Get all tasks (include subtasks)
-router.get('/', async (req: Request, res: Response) => {
+// Get all tasks for the authenticated user (include subtasks)
+router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
+    const userId = parseInt(req.user!.userId);
     const tasks = await prisma.task.findMany({
+      where: { userId },
       include: { user: true, subtasks: true },
     });
     res.json(tasks);
@@ -16,14 +19,24 @@ router.get('/', async (req: Request, res: Response) => {
   }
 });
 
-// Get a single task by ID (include subtasks)
-router.get('/:id', async (req, res): Promise<void> => {
+// Get a single task by ID (include subtasks) - only if owned by user
+router.get('/:id', authenticateToken, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const task = await prisma.task.findUnique({
-      where: { id: Number(req.params.id) },
+    const userId = parseInt(req.user!.userId);
+    const taskId = Number(req.params.id);
+    
+    const task = await prisma.task.findFirst({
+      where: { 
+        id: taskId,
+        userId 
+      },
       include: { user: true, subtasks: true },
     });
-    if (!task) { res.status(404).json({ error: 'Task not found' }); return; }
+    
+    if (!task) { 
+      res.status(404).json({ error: 'Task not found' }); 
+      return; 
+    }
     res.json(task);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch task' });
@@ -31,9 +44,11 @@ router.get('/:id', async (req, res): Promise<void> => {
 });
 
 // Create a new task (with optional subtasks)
-router.post('/', async (req: Request, res: Response) => {
+router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
-    const { title, description, status, dueDate, userId, subtasks } = req.body;
+    const { title, description, status, dueDate, subtasks } = req.body;
+    const userId = parseInt(req.user!.userId);
+    
     const created = await prisma.task.create({
       data: {
         title,
@@ -53,14 +68,27 @@ router.post('/', async (req: Request, res: Response) => {
   }
 });
 
-// Update a task
-router.put('/:id', async (req, res): Promise<void> => {
+// Update a task - only if owned by user
+router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { title, description, status, dueDate, subtasks } = req.body;
+    const userId = parseInt(req.user!.userId);
+    const taskId = Number(req.params.id);
+
+    // First check if the task belongs to the user
+    const existingTask = await prisma.task.findFirst({
+      where: { id: taskId, userId }
+    });
+
+    if (!existingTask) {
+      res.status(404).json({ error: 'Task not found' });
+      return;
+    }
+
     // Update main task fields if provided
     if (title || description || status || dueDate) {
       await prisma.task.update({
-        where: { id: Number(req.params.id) },
+        where: { id: taskId },
         data: {
           ...(title && { title }),
           ...(description && { description }),
@@ -72,7 +100,6 @@ router.put('/:id', async (req, res): Promise<void> => {
 
     // Full subtask editing
     if (Array.isArray(subtasks)) {
-      const taskId = Number(req.params.id);
       const dbSubtasks = await prisma.subTask.findMany({ where: { taskId } });
       const dbSubtaskIds = new Set(dbSubtasks.map(st => st.id));
       const reqSubtaskIds = new Set(subtasks.filter((st: any) => st.id).map((st: any) => Number(st.id)));
@@ -81,36 +108,32 @@ router.put('/:id', async (req, res): Promise<void> => {
       await Promise.all(
         subtasks
           .filter((st: any) => st.id && dbSubtaskIds.has(Number(st.id)))
-          .map((st: any) =>
-            prisma.subTask.update({
-              where: { id: Number(st.id) },
-              data: { title: st.title, done: !!st.done },
-            })
-          )
+          .map((st: any) => prisma.subTask.update({
+            where: { id: Number(st.id) },
+            data: { title: st.title, done: !!st.done },
+          }))
       );
+
       // 2. Create new subtasks (no id)
       await Promise.all(
         subtasks
           .filter((st: any) => !st.id)
-          .map((st: any) =>
-            prisma.subTask.create({
-              data: { title: st.title, done: !!st.done, taskId },
-            })
-          )
+          .map((st: any) => prisma.subTask.create({
+            data: { title: st.title, done: !!st.done, taskId },
+          }))
       );
+
       // 3. Delete removed subtasks (in DB but not in request)
       await Promise.all(
         dbSubtasks
-          .filter((st: any) => !reqSubtaskIds.has(st.id))
-          .map((st: any) =>
-            prisma.subTask.delete({ where: { id: st.id } })
-          )
+          .filter((st) => !reqSubtaskIds.has(st.id))
+          .map((st) => prisma.subTask.delete({ where: { id: st.id } }))
       );
     }
 
     // Return the updated task with fresh subtasks
     const updatedTask = await prisma.task.findUnique({
-      where: { id: Number(req.params.id) },
+      where: { id: taskId },
       include: { user: true, subtasks: true },
     });
     res.json(updatedTask);
@@ -120,11 +143,26 @@ router.put('/:id', async (req, res): Promise<void> => {
   }
 });
 
-// Delete a task
-router.delete('/:id', async (req, res): Promise<void> => {
+// Delete a task - only if owned by user
+router.delete('/:id', authenticateToken, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    await prisma.task.delete({ where: { id: Number(req.params.id) } });
-    res.status(204).end();
+    const userId = parseInt(req.user!.userId);
+    const taskId = Number(req.params.id);
+
+    // First check if the task belongs to the user
+    const existingTask = await prisma.task.findFirst({
+      where: { id: taskId, userId }
+    });
+
+    if (!existingTask) {
+      res.status(404).json({ error: 'Task not found' });
+      return;
+    }
+
+    await prisma.task.delete({
+      where: { id: taskId },
+    });
+    res.status(204).send();
   } catch (err) {
     res.status(500).json({ error: 'Failed to delete task' });
   }
