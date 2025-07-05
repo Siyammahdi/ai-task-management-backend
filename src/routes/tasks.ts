@@ -1,11 +1,10 @@
-import { Router, Request, Response } from 'express';
+import { Router, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 
 const prisma = new PrismaClient();
 const router = Router();
 
-// Get all tasks for the authenticated user (include subtasks)
 router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const userId = parseInt(req.user!.userId);
@@ -19,7 +18,6 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   }
 });
 
-// Get a single task by ID (include subtasks) - only if owned by user
 router.get('/:id', authenticateToken, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const userId = parseInt(req.user!.userId);
@@ -43,7 +41,6 @@ router.get('/:id', authenticateToken, async (req: AuthRequest, res: Response): P
   }
 });
 
-// Create a new task (with optional subtasks)
 router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const { title, description, status, dueDate, subtasks } = req.body;
@@ -68,14 +65,12 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   }
 });
 
-// Update a task - only if owned by user
 router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { title, description, status, dueDate, subtasks } = req.body;
     const userId = parseInt(req.user!.userId);
     const taskId = Number(req.params.id);
 
-    // First check if the task belongs to the user
     const existingTask = await prisma.task.findFirst({
       where: { id: taskId, userId }
     });
@@ -84,8 +79,6 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response): P
       res.status(404).json({ error: 'Task not found' });
       return;
     }
-
-    // Update main task fields if provided
     if (title || description || status || dueDate) {
       await prisma.task.update({
         where: { id: taskId },
@@ -98,13 +91,11 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response): P
       });
     }
 
-    // Full subtask editing
     if (Array.isArray(subtasks)) {
       const dbSubtasks = await prisma.subTask.findMany({ where: { taskId } });
       const dbSubtaskIds = new Set(dbSubtasks.map(st => st.id));
       const reqSubtaskIds = new Set(subtasks.filter((st: any) => st.id).map((st: any) => Number(st.id)));
 
-      // 1. Update existing subtasks (title/done)
       await Promise.all(
         subtasks
           .filter((st: any) => st.id && dbSubtaskIds.has(Number(st.id)))
@@ -114,7 +105,6 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response): P
           }))
       );
 
-      // 2. Create new subtasks (no id)
       await Promise.all(
         subtasks
           .filter((st: any) => !st.id)
@@ -123,7 +113,6 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response): P
           }))
       );
 
-      // 3. Delete removed subtasks (in DB but not in request)
       await Promise.all(
         dbSubtasks
           .filter((st) => !reqSubtaskIds.has(st.id))
@@ -131,7 +120,6 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response): P
       );
     }
 
-    // Return the updated task with fresh subtasks
     const updatedTask = await prisma.task.findUnique({
       where: { id: taskId },
       include: { user: true, subtasks: true },
@@ -143,7 +131,6 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response): P
   }
 });
 
-// Delete a task - only if owned by user
 router.delete('/:id', authenticateToken, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const userId = parseInt(req.user!.userId);
